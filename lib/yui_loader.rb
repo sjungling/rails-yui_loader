@@ -126,7 +126,7 @@ module Yui
 
       @dirty = true
 
-      @sorted = nil
+      @sorted = Array.new
 
       @accounted_for = Hash.new
 
@@ -242,92 +242,66 @@ module Yui
       components.each { |c| load_single(c)}
     end
     
-    def script
-      return tags(YUI_JS)
-    end
-  
-    def css
-      return tags(YUI_CSS)
-    end
 
     def tags(module_type = nil, skip_sort = false)
-      return process_dependencies(YUI_TAGS, module_type, skip_sort)
+      dependencies = process_dependencies(YUI_TAGS, module_type, skip_sort)
+      css = []
+      js = []
+      dependencies.each do |d| 
+        css << d if d.values.first['type'].include?(YUI_CSS)
+        js << d  if d.values.first['type'].include?(YUI_JS)
+      end
+      css.flatten!
+      js.flatten!
+      html = String.new 
+      html += get_stylesheet_tag(css)
+      html += get_javascript_tag(js)
+      return html
     end
 
-    def script_embed
-      return embed(YUI_JS)
-    end
-
-    def css_embed
-      return embed(YUI_CSS)
-    end
-
-    def embed(module_type, skip_sort = false)
-      return process_dependencies(YUI_EMBED, module_type, skip_sort)
-    end
-
-    def script_data
-      return data(YUI_JS)
-    end
-
-    def css_data
-      return data(YUI_CSS)
-    end
-
-    def data(module_type, allow_rollups = false, skip_sort = false)
-      set_processed_module_type(module_type) unless allow_rollups
-      return process_dependencies(YUI_DATA, module_type, skip_sort)
-    end
-
-    def script_json
-      return json(YUI_JS)
-    end
-
-    def css_json
-      return json(YUI_CSS)
-    end
-
-    # Used to fetch a JSON object with the required JavaScript and CSS components
-    # Params: module_type, allow_rollups, skip_sort, full
-    # Returns: Returns a JSON object with the required Javascript and CSS components
-    def json(module_type, allow_rollups = false, skip_sort = false, full = false)
-      set_processed_module_type(module_type) unless allow_rollups
-      type =  full ?  YUI_FULLJSON : YUI_JSON
-      return process_dependencies(type, module_type, skip_sort)
-    end
-
-    def script_raw
-      return raw(YUI_JS)
-    end
-
-    def css_raw
-      return raw(YUI_CSS)
-    end
-
-    # Produces the raw JavaScript and CSS code line without the actual script / link tags
-    # Params : module_type, allow_rollups, skip_sort
-    # Returns : Raw JavaScript and CSS
-    def raw(module_type, allow_rollups = false, skip_sort = false)
-      return process_dependencies(YUI_RAW, module_type, skip_sort)
-    end
-
-    def get_loaded_modules
-      loaded = Hash.new
-      @loaded.each do |k, v|
-        if @modules.has_key?(k)
-          loaded[@modules[k][YUI_TYPE]] = { get_url(k) => get_provides(k) }
-        else
-          raise "YUI_LOADER ERROR: encountered undefined modules: #{k}"
+    def get_javascript_tag(mods)
+      html = String.new
+      combo = []
+      
+      if @combine 
+        mods.each do |m|
+          m.each do |name, attributes|
+            combo << attributes['path']
+          end
+        end
+        html += '<script type="text/javascript" charset="utf-8" src="' + @combo_base + combo.join("&") + '"></script>' + "\n"
+      else
+        mods.each do |m|
+          m.each do |name, attributes|
+            html += '<script type="text/javascript" charset="utf-8" src="' + @combo_base + attributes['path'] + '"></script>' + "\n"
+          end
         end
       end
-      return loaded
+      return html
     end
 
-    def get_loaded_modules_as_json
-      return {"ERROR" => "json library not available" }.to_json unless @json_avail
-      return @get_loaded_modules.to_json
-    end
+    def get_stylesheet_tag(mods)
+      html = String.new
+      combo = []
 
+      if @combine
+        mods.each do |m|
+          m.each do |name, attributes|
+            combo << attributes['path']
+          end
+        end
+        html += '<link rel="stylesheet" href="'+ @combo_base + combo.join("&") + '" type="text/css" charset="utf-8" />' + "\n"
+      else
+        mods.each do |m|
+          m.each do |name, attributes|
+            html += '<link rel="stylesheet" href="'+ @combo_base + attributes['path'] + '" type="text/css" charset="utf-8" />' + "\n"
+          end
+        end
+      end
+      
+      return html
+    end
+    
     protected
   
     def account_for(name)
@@ -473,69 +447,66 @@ module Yui
     end
 
     def check_threshold?(mod, module_list)
-      if not module_list.empty? and mod[YUI_ROLLUP]
+      if not module_list.empty? and mod[YUI_ROLLUP].is_a?(Fixnum)
         matched = 0
         thresh = mod[YUI_ROLLUP]
-        module_list.each do |mod_name, mod_def|
-          matched += 1 if mod[YUI_SUPERSEDES].include?(mod_name)
+        module_list.each do |mod_list_name, mod_def|
+          matched += 1 if mod[YUI_SUPERSEDES].include?(mod_list_name)
         end
-        return true if (matched >= thresh)
+        return true  if (matched >= thresh)
       end
       return false
     end
       
     # Only called if the loader is dirty
     def sort_dependencies(module_type, skip_sort = false)
-      reqs     = Hash.new
-      top      = Hash.new
-      bot      = Hash.new
-      not_done = Hash.new
-      sorted   = Hash.new
-      found    = Hash.new
+      requires     = {}
+      top      = {}
+      bot      = {}
+      not_done = {}
+      sorted   = {}
+      found    = {}
   
       # add global dependenices so they are included when calculating rollups
       globals = get_global_dependencies(module_type)
   
-      globals.each { |name, dep| reqs[name] = true }
+      globals.each { |name, dep| requires[name] = true }
   
       # get and store the full list of dependencies
       @requests.each do |name, val|
-        reqs[name] = true
-        newreqs = get_all_dependencies(name, @load_optional)
-        newreqs.each { |new_name, new_val| reqs[new_name] = true}
+        requires[name] = true
+        requires.merge!(get_all_dependencies(name, @load_optional))
       end
   
       # if we skip the sort, just return the list that includes everything
       # that was requested, all of their requirements, and global modules.
       # This is filtered by module type if supplied
-      return prune(reqs, module_type) if skip_sort
+      return prune(requires, module_type) if skip_sort
   
       # if we are sorting again after new modules have been requested, we do not rollup
       # and we can remove the accounted for modules
+
       if not @accounted_for.empty? or not @loaded.empty?
-        @loaded.merge(@accounted_for).each {|name, value| reqs.delete(name)}
+        @loaded.merge(@accounted_for).each {|name, value| requires.delete(name)}
       elsif @allow_rollups
-        # otherwise, check for rollups
         rollups = @rollup_modules
-    
         unless rollups.empty?
           rollups.each do |name, rollup|
-            unless reqs[name] and check_threshold?(rollup, reqs)
-              reqs[name] = true
-              new_reqs = get_all_dependencies(name, @load_optional, reqs)
-              new_reqs.each { |new_name, new_value| reqs[new_name] = true}
+            if requires[name].nil? and check_threshold?(rollup, requires)
+              requires[name] = true
+              requires.merge!(get_all_dependencies(name, @load_optional, requires))
             end
           end
         end
       end
   
       # clear out superseded packages
-      reqs.each do |name, val|
-        @modules[name][YUI_SUPERSEDES].each { |i, val| reqs.delete(i) } if @modules[name][YUI_SUPERSEDES]
+      requires.each do |name, val|
+        @modules[name][YUI_SUPERSEDES].each { |i, val| requires.delete(i) } if @modules[name][YUI_SUPERSEDES]
       end
     
       # move globals to the top
-      reqs.each do |name, val|
+      requires.each do |name, val|
         unless @modules[name][YUI_GLOBAL].nil?
           top[name] = name
         else
@@ -556,15 +527,15 @@ module Yui
         return sorted.merge!(not_done) if (counted += 1) > 200
     
         not_done.each do |name, val|
-          new_reqs = get_all_dependencies(name, @load_optional)
+          new_requires = get_all_dependencies(name, @load_optional)
           failed = false
       
-          if new_reqs.empty?
+          if new_requires.empty?
             sorted[name] = name
             @accounted_for[name]
             not_done.delete(name)
           else
-            new_reqs.each do |dep_name, dep_val|
+            new_requires.each do |dep_name, dep_val|
               unless @accounted_for[dep_name] and list_satisfies?(dep_name, sorted)
                 failed = true
                 tmp    = Hash.new
@@ -606,81 +577,79 @@ module Yui
     end
 
     def process_dependencies(output_type, module_type, skip_sort = false, show_loaded = false)
-      html = String.new
-      json = Hash.new
-      
-      if (module_type.nil? and not output_type.include?(YUI_JSON) and not output_type.include?(YUI_DATA))
-        @delay_cache = true
-        css = process_dependencies(output_type, YUI_CSS, skip_sort, show_loaded)
-        js = process_dependencies(output_type, YUI_JS, skip_sort, show_loaded)
-        @update_cache unless @cache_found
-        return css + js
-      end
-  
+      # 
+      # if (module_type.nil? and not output_type.include?(YUI_JSON) and not output_type.include?(YUI_DATA))
+      #   @delay_cache = true
+      #   css = process_dependencies(output_type, YUI_CSS, skip_sort, show_loaded)
+      #   js = process_dependencies(output_type, YUI_JS, skip_sort, show_loaded)
+      #   @update_cache unless @cache_found
+      #   return css + js
+      # end
       if show_loaded or (not @dirty and not @sorted.empty?)
         sorted = prune(@sorted, module_type)
       else
         sorted = sort_dependencies(module_type, skip_sort)
       end
-  
+      foo = []
       sorted.each do |name, val|
         if show_loaded or not @loaded[name]
           dep = @modules[name]
-          case output_type
-          when YUI_EMBED
-            html += get_content(name, dep[YUI_TYPE]) + "\n"
-            when YUI_RAW
-            html += get_raw(name) + "\n"
-            when YUI_DATA
-            json[dep[YUI_TYPE]] = { get_url(name) => get_provides(name) }
-            when YUI_FULLJSON
-            json[dep[YUI_NAME]] = {
-              YUI_TYPE     => dep[YUI_TYPE], 
-              YUI_URL      => get_url(name), 
-              YUI_PROVIDES => get_provides(name), 
-              YUI_REQUIRES => dep[YUI_REQUIRES], 
-              YUI_OPTIONAL => dep[YUI_OPTIONAL]
-            }
-            else
-              if @combine
-                add_to_combo(name, dep[YUI_TYPE])
-                html = get_combo_link(dep[YUI_TYPE])
-              else
-                html += get_link(name, dep[YUI_TYPE]) + "\n"
-              end
-          end
+          foo << add_to_combo(name, dep[YUI_TYPE])
+          # case output_type
+          # when YUI_EMBED
+          #   html += get_content(name, dep[YUI_TYPE]) + "\n"
+          #   when YUI_RAW
+          #   html += get_raw(name) + "\n"
+          #   when YUI_DATA
+          #   json[dep[YUI_TYPE]] = { get_url(name) => get_provides(name) }
+          #   when YUI_FULLJSON
+          #   json[dep[YUI_NAME]] = {
+          #     YUI_TYPE     => dep[YUI_TYPE], 
+          #     YUI_URL      => get_url(name), 
+          #     YUI_PROVIDES => get_provides(name), 
+          #     YUI_REQUIRES => dep[YUI_REQUIRES], 
+          #     YUI_OPTIONAL => dep[YUI_OPTIONAL]
+          #   }
+          #   else
+          #     if @combine
+          #       add_to_combo(name, dep[YUI_TYPE])
+          #       html = get_combo_link(dep[YUI_TYPE])
+          #     else
+          #       html += get_link(name, dep[YUI_TYPE]) + "\n"
+          #     end
+          # end
         end
       end
   
       # if the data has not been cached, and we are not running two rotations for separating css and js, cache what we have
       @update_cache if (@cache_avail and @cache_found and @delay_cache)
   
-      # logger.info(json.inspect)
-      unless json.empty?
-        if @json_avail
-          html += json.to_json
-        else
-          html += "<!-- JSON not available, request failed -->"
-        end
-      end
-  
+      # # logger.info(json.inspect)
+      # unless json.empty?
+      #   if @json_avail
+      #     html += json.to_json
+      #   else
+      #     html += "<!-- JSON not available, request failed -->"
+      #   end
+      # end
+      #   
       # after the first pass we no longer try to use meta modules
       set_processed_module_type(module_type)
   
       # keep track of all the stuff that we loaded so that we don't reload
       # script if the page makes multiple calls to tags
       @loaded.merge!(sorted)
-      
   
-      # return the raw data structure
-      if output_type.include?(YUI_DATA)
-        return json 
-      elsif not @undefined.empty?
-        html += "<!-- The following modules were requested but are not defined: #{@undefined.join(", ")} -->"
-      end
+      # # return the raw data structure
+      # if output_type.include?(YUI_DATA)
+      #   return json 
+      # elsif not @undefined.empty?
+      #   html += "<!-- The following modules were requested but are not defined: #{@undefined.join(", ")} -->"
+      # end
       # puts "process dep end\t#{module_type}\n\t#{html}\n"
-      
-      return html
+      # puts "\n\tFinal foo #{foo.inspect}"
+      return foo
+      # return html
     end
 
     # Retrieve the calculated url for the component in questio
@@ -795,21 +764,21 @@ module Yui
     def add_to_combo(name, type)
       # logger.info("add to combo #{name} of type #{type}")
       path_to_module = [@combo_default_version, "/build/", @modules[name][YUI_PATH]].join
-  
-      if type.include?(YUI_CSS)
-        if @css_combo_location.nil?
-          @css_combo_location = [@combo_base,path_to_module].join
-        else
-          @css_combo_location += "&amp;" + path_to_module
-        end
-      else
-        if @js_combo_location.nil?
-          @js_combo_location = [@combo_base, path_to_module].join
-        else
-          # logger.info("js append \n\t#{path_to_module} to \n\t#{@js_combo_location}")
-          @js_combo_location += "&amp;" + path_to_module
-        end
-      end
+      return {name => {"type" => type, "path" => path_to_module}}
+      # if type.include?(YUI_CSS)
+      #   if @css_combo_location.nil?
+      #     @css_combo_location = [@combo_base,path_to_module].join
+      #   else
+      #     @css_combo_location += "&amp;" + path_to_module
+      #   end
+      # else
+      #   if @js_combo_location.nil?
+      #     @js_combo_location = [@combo_base, path_to_module].join
+      #   else
+      #     # logger.info("js append \n\t#{path_to_module} to \n\t#{@js_combo_location}")
+      #     @js_combo_location += "&amp;" + path_to_module
+      #   end
+      # end
     end
 
     def get_provides(name)
