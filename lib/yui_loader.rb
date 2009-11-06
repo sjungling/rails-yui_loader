@@ -4,7 +4,6 @@ require 'md5'
 require 'net/http'
 require "curl"
 require 'ruby-debug'
-require 'logger'
 
 module Yui
   YUI_AFTER      = 'after'
@@ -42,7 +41,7 @@ module Yui
   YUI_URL        = 'url'
   
   module LoaderHelper
-
+    # NOTE: Proof of concept for future
     def yui_css(version, format = YUI_TAGS, modules = [], load_opt = false, load_combo = true)
       y = Yui::Loader.new(version)
       y.load_optional = load_opt
@@ -92,7 +91,6 @@ module Yui
     #   Default: "http://yui.yahooapis.com/combo? 
     # 
 
-    # attr_accessor :base, :combo_base, :filter, :target, :combine, :allow_rollups, :load_optional, :rollups_to_top, :processed_module_types, :requests, :loaded, :superseded, :undefined, :dirty, :sorted, :accounted_for, :filter_list, :skins, :modules, :full_cache_key, :base_overrides, :cache_found, :delay_cache, :version, :version_key, :skin, :rollup_modules, :global_modules, :satisfaction_map, :dep_cache, :filters, :css_combo_location, :js_combo_location, :yui_current, :combo_default_version, :cache_avail, :curl_avail, :json_avail, :embed_avail, :logger
 
     attr_accessor :load_optional, :combine, :combine_base, :allow_rollups, :base, :filter
     def initialize(yui_version, cache_key = nil, modules = nil, no_yui = false)
@@ -242,17 +240,15 @@ module Yui
       components.each { |c| load_single(c)}
     end
     
+    
+    def get_dependencies(module_type, modules)
+      return modules.select{|mods| mods if mods['type'].include?(module_type)}.flatten
+    end
 
     def tags(module_type = nil, skip_sort = false)
       dependencies = process_dependencies(YUI_TAGS, module_type, skip_sort)
-      css = []
-      js = []
-      dependencies.each do |d| 
-        css << d if d.values.first['type'].include?(YUI_CSS)
-        js << d  if d.values.first['type'].include?(YUI_JS)
-      end
-      css.flatten!
-      js.flatten!
+      css = get_dependencies(YUI_CSS,dependencies)
+      js = get_dependencies(YUI_JS,dependencies)
       html = String.new 
       html += get_stylesheet_tag(css)
       html += get_javascript_tag(js)
@@ -261,20 +257,15 @@ module Yui
 
     def get_javascript_tag(mods)
       html = String.new
-      combo = []
-      
-      if @combine 
-        mods.each do |m|
-          m.each do |name, attributes|
-            combo << attributes['path']
-          end
+      if @combine
+        combo = []
+        mods.each do |mod|
+          combo << mod['path']
         end
         html += '<script type="text/javascript" charset="utf-8" src="' + @combo_base + combo.join("&") + '"></script>' + "\n"
       else
-        mods.each do |m|
-          m.each do |name, attributes|
-            html += '<script type="text/javascript" charset="utf-8" src="' + @combo_base + attributes['path'] + '"></script>' + "\n"
-          end
+        mods.each do |mod|
+          html += '<script type="text/javascript" charset="utf-8" src="' + @combo_base + mod['path'] + '"></script>' + "\n"
         end
       end
       return html
@@ -282,20 +273,15 @@ module Yui
 
     def get_stylesheet_tag(mods)
       html = String.new
-      combo = []
-
       if @combine
-        mods.each do |m|
-          m.each do |name, attributes|
-            combo << attributes['path']
-          end
+        combo = []
+        mods.each do |mod|
+          combo << mod['path']
         end
         html += '<link rel="stylesheet" href="'+ @combo_base + combo.join("&") + '" type="text/css" charset="utf-8" />' + "\n"
       else
-        mods.each do |m|
-          m.each do |name, attributes|
-            html += '<link rel="stylesheet" href="'+ @combo_base + attributes['path'] + '" type="text/css" charset="utf-8" />' + "\n"
-          end
+        mods.each do |mod|
+          html += '<link rel="stylesheet" href="'+ @combo_base + mod['path'] + '" type="text/css" charset="utf-8" />' + "\n"
         end
       end
       
@@ -387,6 +373,13 @@ module Yui
       return  skin_name
     end
   
+    
+    # Identify dependencies for a give module name
+    # @method getAllDependencies
+    # @param {string} mname Module name
+    # @param {boolean} loadOptional Load optional dependencies
+    # @param {array} completed
+    # @return {array}
     def get_all_dependencies(module_name, load_optional = false, completed = {})
       key = [YUI_REQUIRES, module_name].join
       key += YUI_OPTIONAL if load_optional
@@ -577,79 +570,32 @@ module Yui
     end
 
     def process_dependencies(output_type, module_type, skip_sort = false, show_loaded = false)
-      # 
-      # if (module_type.nil? and not output_type.include?(YUI_JSON) and not output_type.include?(YUI_DATA))
-      #   @delay_cache = true
-      #   css = process_dependencies(output_type, YUI_CSS, skip_sort, show_loaded)
-      #   js = process_dependencies(output_type, YUI_JS, skip_sort, show_loaded)
-      #   @update_cache unless @cache_found
-      #   return css + js
-      # end
       if show_loaded or (not @dirty and not @sorted.empty?)
         sorted = prune(@sorted, module_type)
       else
         sorted = sort_dependencies(module_type, skip_sort)
       end
-      foo = []
+      
+      final_modules = Array.new
       sorted.each do |name, val|
         if show_loaded or not @loaded[name]
           dep = @modules[name]
-          foo << add_to_combo(name, dep[YUI_TYPE])
-          # case output_type
-          # when YUI_EMBED
-          #   html += get_content(name, dep[YUI_TYPE]) + "\n"
-          #   when YUI_RAW
-          #   html += get_raw(name) + "\n"
-          #   when YUI_DATA
-          #   json[dep[YUI_TYPE]] = { get_url(name) => get_provides(name) }
-          #   when YUI_FULLJSON
-          #   json[dep[YUI_NAME]] = {
-          #     YUI_TYPE     => dep[YUI_TYPE], 
-          #     YUI_URL      => get_url(name), 
-          #     YUI_PROVIDES => get_provides(name), 
-          #     YUI_REQUIRES => dep[YUI_REQUIRES], 
-          #     YUI_OPTIONAL => dep[YUI_OPTIONAL]
-          #   }
-          #   else
-          #     if @combine
-          #       add_to_combo(name, dep[YUI_TYPE])
-          #       html = get_combo_link(dep[YUI_TYPE])
-          #     else
-          #       html += get_link(name, dep[YUI_TYPE]) + "\n"
-          #     end
-          # end
+          final_modules << add_to_combo(name, dep[YUI_TYPE])
         end
       end
   
       # if the data has not been cached, and we are not running two rotations for separating css and js, cache what we have
       @update_cache if (@cache_avail and @cache_found and @delay_cache)
   
-      # # logger.info(json.inspect)
-      # unless json.empty?
-      #   if @json_avail
-      #     html += json.to_json
-      #   else
-      #     html += "<!-- JSON not available, request failed -->"
-      #   end
-      # end
-      #   
+
       # after the first pass we no longer try to use meta modules
       set_processed_module_type(module_type)
   
       # keep track of all the stuff that we loaded so that we don't reload
       # script if the page makes multiple calls to tags
       @loaded.merge!(sorted)
-  
-      # # return the raw data structure
-      # if output_type.include?(YUI_DATA)
-      #   return json 
-      # elsif not @undefined.empty?
-      #   html += "<!-- The following modules were requested but are not defined: #{@undefined.join(", ")} -->"
-      # end
-      # puts "process dep end\t#{module_type}\n\t#{html}\n"
-      # puts "\n\tFinal foo #{foo.inspect}"
-      return foo
-      # return html
+
+      return final_modules
     end
 
     # Retrieve the calculated url for the component in questio
@@ -698,11 +644,20 @@ module Yui
       return remote_content
     end
 
+    # Retrieve the raw source contents for a given module name
+    # @method get_raw
+    # @param {string} name The module name you wish to fetch the source from
+    # @return {string} raw source
     def get_raw(name)
       raise "CURL and/or Caching was not detected, so the content can't be embedded" unless @embed_avail
       return get_remote_content(get_url(name))
     end
 
+    # Retrieve the style or script node with embedded source for a given module name and resource type
+    # @method get_content
+    # @param {string} name The module name to fetch the source from
+    # @param {string} type Resource type (i.e.) YUI_JS or YUI_CSS
+    # @return {string} style or script node with embedded source
     def get_content(name, type)
       unless @curl_avail
         return "<!-- CURL was not detected, so the content can't be embedded -->" + get_link(name, type)
@@ -718,6 +673,11 @@ module Yui
       end
     end
 
+    # Retrieve the link or script include for a given module name and resource type
+    # @method get_link
+    # @param {string} name The module name to fetch the include for
+    # @param {string} type Resource type (i.e.) YUI_JS or YUI_CSS
+    # @return {string} link or script include
     def get_link(name, type)
       url = get_url(name)
   
@@ -730,6 +690,10 @@ module Yui
       end
     end
 
+    # Retrieves the combo link or script include for the currently loaded modules of a specific resource type
+    # @method get_combo_link                                                                                       
+    # @param {string} type Resource type (i.e.) YUI_JS or YUI_CSS                                                
+    # @return {string} link or script include                                                                    
     def get_combo_link(type)
       url = String.new
   
@@ -761,26 +725,19 @@ module Yui
       return url
     end
 
+    # Adds a module the combo collection for a specified resource type
+    # @method addToCombo
+    # @param {string} name The module name to add
+    # @param {string} type Resource type (i.e.) YUI_JS or YUI_CSS
     def add_to_combo(name, type)
-      # logger.info("add to combo #{name} of type #{type}")
       path_to_module = [@combo_default_version, "/build/", @modules[name][YUI_PATH]].join
-      return {name => {"type" => type, "path" => path_to_module}}
-      # if type.include?(YUI_CSS)
-      #   if @css_combo_location.nil?
-      #     @css_combo_location = [@combo_base,path_to_module].join
-      #   else
-      #     @css_combo_location += "&amp;" + path_to_module
-      #   end
-      # else
-      #   if @js_combo_location.nil?
-      #     @js_combo_location = [@combo_base, path_to_module].join
-      #   else
-      #     # logger.info("js append \n\t#{path_to_module} to \n\t#{@js_combo_location}")
-      #     @js_combo_location += "&amp;" + path_to_module
-      #   end
-      # end
+      return {"name" => name, "type" => type, "path" => path_to_module}
     end
 
+    # Identifies what module(s) are provided by a given module name (e.g.) yaho-dom-event provides yahoo, dom, and event
+    # @method getProvides
+    # @param {string} name Module name
+    # @return {array}
     def get_provides(name)
       provides = Array.new
       provides << name
