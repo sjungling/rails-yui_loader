@@ -2,8 +2,8 @@
 require 'rubygems'
 require 'active_support'
 
-module Yui
-  class Library
+module Yui #:nodoc:
+  class Library #:nodoc:
     attr_accessor :base, :skin, :modules, :satisfaction_map, :required
     def initialize(y_base, y_skin, y_modules = [])
       @base             = y_base
@@ -79,7 +79,7 @@ module Yui
     
   end
   
-  class Mod
+  class Mod #:nodoc:
     attr_reader :name, :type, :path, :requires, :supersedes, :skinnable, :optional, :after, :package, :rollup
     def initialize(mod_name, mod_type, mod_path, mod_requires = [], mod_supersedes = [], mod_optional =[], mod_after = [], mod_package = nil, mod_rollup = nil, mod_skinnable = true)
       @name       = mod_name

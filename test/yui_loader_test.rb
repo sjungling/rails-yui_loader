@@ -62,5 +62,17 @@ class YuiLoaderTest < ActiveSupport::TestCase
     puts @y.tags
   end
   
+  test "css tags only" do
+    @y.load(['tabview', 'grids'])
+    puts "\ncss tags only"
+    puts @y.tags(:css)
+  end
+  
+  test "js tags only" do
+    @y.load(["tabview", "grids"])
+    puts "\njs tags only"
+    puts @y.tags(:j)
+  end
+  
 
 end

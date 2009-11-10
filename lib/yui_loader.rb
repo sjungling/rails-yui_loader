@@ -1,11 +1,9 @@
-require 'rubygems'
-require 'action_view'
 require 'md5'
 require 'net/http'
 require "curl"
 require 'ruby-debug'
 
-module Yui
+module Yui #:nodoc:
   YUI_AFTER      = 'after'
   YUI_BASE       = 'base'
   YUI_CSS        = 'css'
@@ -40,7 +38,7 @@ module Yui
   YUI_TYPE       = 'type'
   YUI_URL        = 'url'
   
-  module LoaderHelper
+  module LoaderHelper #:nodoc:
     # NOTE: Proof of concept for future
     def yui_css(version, format = YUI_TAGS, modules = [], load_opt = false, load_combo = true)
       y = Yui::Loader.new(version)
@@ -60,39 +58,48 @@ module Yui
   end
   
   
+  # = Yui::Loader
+  # 
+  # YuiLoader is a Ruby on Rails plugin based upon the YUI PHPLoader scripts by Yahoo!
+  # 
+  # == Required Constructor Attributes
+  #   - yui_version:    Version of YUI library to load. Must have matching meta file
+  # == Optional Constructor Attributes
+  #   - cache_key:      Used to generate unique key if caching is enabled
+  #   - modules:        Custom module data. See below for examples
+  #   - no_yui:         Don't use the YUI library, but just custom modules
+  # 
+  # == Optional Configurations
+  #   - allow_rollups: (boolean) Aggregate the like files into a single request. 
+  #                     Default: true
+  #   - base:          (String) Specify a different YUI build directory path
+  #                      Default: http://yui.yahooapis.com/YUI_VERSION/build/
+  #   - combine:       (boolean) If set to true, YUI files will be combined into a
+  #   single request using the combo service provided on the Yahoo! CDN
+  #                       Default: true  
+  #   - combo_base:    (string) The base path to the Yahoo! CDN service. 
+  #                       Default: "http://yui.yahooapis.com/combo? 
+  #   - filter:        (String) Filter to apply to urls. Options are:
+  #                      YUI_DEBUG                                                          
+  #                        Selects the debug versions of the library (e.g., event-debug.js).
+  #                        This option will automatically include the logger widget         
+  #                      YUI_RAW                                                            
+  #                        Selects the non-minified version of the library (e.g., event.js).
+  # 
+  #   - load_optional: (boolean) Should loader load optional dependencies for the
+  #   components you're requesting? 
+  #                     Default: false.
+  # 
+  # == Constructor Examples
+  # 
+  #   @yahoo = Yui::Loader.new("2.8.0")
+  #   @yahoo.load_optional = true
+  #   @yahoo.load(["grids"])
+  # 
   class Loader
-    # base      (string) Allows you to specify a different location (as a full
-    #   or relative filepath) for the YUI build directory. By default, YUI PHP
-    #   Loader will serve files from Yahoo's servers.
-    # 
-    # filter   (string) A filter to apply to result urls. This filter will
-    #   modify the default path for all modules. The default path for the YUI
-    #   library is the minified version of the files (e.g., event-min.js). The
-    #   valid filters are:
-    #     YUI_DEBUG
-    #       Selects the debug versions of the library (e.g., event-debug.js).
-    #       This option will automatically include the logger widget
-    #     YUI_RAW
-    #       Selects the non-minified version of the library (e.g., event.js).
-    # 
-    # allowRollups  (boolean) Should Loader use aggregate files (like
-    #   yahoo-dom-event.js or utilities.js) that combine several YUI
-    #   components in a single HTTP request? Default: true.
-    # 
-    # loadOptional  (boolean) Should loader load optional dependencies for the
-    #   components you're requesting? (Note: If you only want some but not all
-    #   optional dependencies, you can list out the dependencies you want as
-    #   part of your required list.) Default: false.
-      
-    # combine (boolean) If set to true, YUI files will be combined into a
-    #   single request using the combo service provided on the Yahoo! CDN
-    # 
-    # comboBase  (string) The base path to the Yahoo! CDN service. 
-    #   Default: "http://yui.yahooapis.com/combo? 
-    # 
 
 
-    attr_accessor :load_optional, :combine, :combine_base, :allow_rollups, :base, :filter
+    attr_accessor :load_optional, :combine, :combo_base, :allow_rollups, :base, :filter
     def initialize(yui_version, cache_key = nil, modules = nil, no_yui = false)
 
       # Combined into a single request using the combo service to potentially reduce the number of http requests required
@@ -104,28 +111,32 @@ module Yui
       # Whether or not to load optional dependencies
       @load_optional = false
 
-      # Force rollup modules 
-      @rollups_to_top = false
+      # # Force rollup modules 
+      # @rollups_to_top = false
 
       # keeps track of modules
       @processed_module_types = Hash.new
       
       # all required modules
-      @requests = Hash.new
+      @required_modules = Hash.new
       
       # Modules that have been outputted via getLink
       @loaded = Hash.new
       
       # list of all modules superseded by the list of required modiles
-      @superseded = Hash.new
+      # TODO evaluate necessity
+      # @superseded = Hash.new
       
       # track undefined modules
-      @undefined = Hash.new
+      @undefined_modules = Hash.new
 
+      # Loader state, when false we're ready to generate some fu
       @dirty = true
-
+      
+      # Modules
       @sorted = Array.new
 
+      # Modules that have been loaded ? 
       @accounted_for = Hash.new
 
       # A list of modules to apply the filter to.
@@ -134,85 +145,43 @@ module Yui
       # required skins
       @skins = Array.new
 
+      # Available modules from the particular version of YUI
       @modules = Hash.new
 
+      # Var name says it all
       @full_cache_key = nil
 
+      # Data about new build directory location
       @base_overrides = Hash.new
 
+      # Were we able to locate cached data?
       @cache_found = false
 
+      # Should we delay storing data to cache?
       @delay_cache = false
 
       # cache busting hack for environs that use same path for current vers of lib
       @version = nil
 
+      # Unidentified fu
       @version_key = "_yuiversion"
 
+      # What skin are we using?
       @skin = Hash.new
-          
+
+      # Available rollup modules (e.g. reset-fonts-grids.css for ['reset','fonts','grids'])
       @rollup_modules = Hash.new
       
+      # Global Modules
       @global_modules = Hash.new
       
+      # Shows what modules are satisified by rollup modules 
       @satisfaction_map = Hash.new
       
-      @dep_cache = Hash.new
+      # Temp variable (best I can tell)
+      @dependencies_cache = Hash.new
       
-      @filters = Hash.new
-
-      # base path to combo service
-      @combo_base = "http://yui.yahooapis.com/combo?"
-
-      # # additional vars used to assist with combo handling
-      # @css_combo_location = nil
-      # 
-      # @js_combo_location = nil
-      # @yui_current = Array.new
-
-      unless yui_version
-        raise "Error: the first parameter of YAHOO_util_loader must specify which version of YUI to use"
-      end
-    
-      json_config_file = [File.dirname(__FILE__),"/../" , '/meta/json_', yui_version, '.txt'].join()
-
-      if (File.exist?(json_config_file))
-        @yui_current = ActiveSupport::JSON.decode(File.read(json_config_file))
-      else
-        raise "Unable to find a suitable YUI metadata file!"
-      end
-
-      @cache_avail           = ActionController::Base.cache_configured?
-      @curl_avail            = Curl::Easy.methods.include?('http_get')
-      @json_avail            = Rails.methods.include?('to_json')
-      @embed_avail           = (@curl_avail and @cache_avail)
-      @base                  = @yui_current[YUI_BASE]
-      @combo_default_version = yui_version
-
-
-      if @cache_key and @cache_avail
-        @full_cache_key = MD5.hexdigest(@base + @cache_key)
-        @cache = Rails.cache.read(@full_cache_key)
-        unless @cache.nil?
-          @cache_found      = true
-          @modules          = cache[YUI_MODULES]
-          @skin             = cache[YUI_SKIN]
-          @rollup_modules   = cache[YUI_ROLLUP]
-          @global_modules   = cache[YUI_GLOBAL]
-          @satisfaction_map = cache[YUI_SATISFIES]
-          @dep_cache        = cache[YUI_DEPCACHE]
-          @filters          = cache[YUI_FILTERS]
-        end
-      end
-
-      @modules = no_yui ? Hash.new : @yui_current['moduleInfo']
-
-      # merge modules if we have some custom modules
-      @modules.merge!(modules.to_hash) unless modules.nil?
-      @skin = @yui_current[YUI_SKIN]
-      @skin['overrides'] = Hash.new
-      @skin[YUI_PREFIX] = 'skin-'
-
+      # Filters supplied by user: YUI_DEBUG or YUI_RAW
       @filters = {
         'YUI_RAW' => {
           'YUI_SEARCH'  => '-min\.js',
@@ -224,6 +193,58 @@ module Yui
         }
       }
 
+
+      # base path to combo service
+      @combo_base = "http://yui.yahooapis.com/combo?"
+
+      unless yui_version
+        raise "ERROR: the first parameter of Yui::Loader must be the version of YUI you want to use"
+      end
+    
+      # Load up the JSON config file from ../meta/
+      json_config_file = [File.dirname(__FILE__),"/../" , '/meta/json_', yui_version, '.txt'].join()
+
+      if (File.exist?(json_config_file))
+        @yui_current = ActiveSupport::JSON.decode(File.read(json_config_file))
+      else
+        raise "ERROR: Unable to find a suitable YUI metadata file!"
+      end
+
+      # Support for various methods of output
+      # TODO: Move these to the eventual Library class as methods (bool)
+      @cache_avail           = ActionController::Base.cache_configured?
+      @curl_avail            = Curl::Easy.methods.include?('http_get')
+      @json_avail            = Rails.methods.include?('to_json')
+      @embed_avail           = (@curl_avail and @cache_avail)
+      
+      if @cache_key and @cache_avail
+        @full_cache_key = MD5.hexdigest(@base + @cache_key)
+        @cache = Rails.cache.read(@full_cache_key)
+        unless @cache.nil?
+          @cache_found        = true
+          @modules            = cache[YUI_MODULES]
+          @skin               = cache[YUI_SKIN]
+          @rollup_modules     = cache[YUI_ROLLUP]
+          @global_modules     = cache[YUI_GLOBAL]
+          @satisfaction_map   = cache[YUI_SATISFIES]
+          @dependencies_cache = cache[YUI_DEPCACHE]
+          @filters            = cache[YUI_FILTERS]
+        end
+      end
+
+      # Load some default data from the meta file
+      @base                  = @yui_current[YUI_BASE]
+      @combo_default_version = yui_version
+
+      # == Module Set-up
+      # Load modules from meta file then merge with any custom module definitions
+      @modules = @yui_current['moduleInfo']
+      
+      # merge modules if we have some custom modules
+      @modules.merge!(modules.to_hash) unless modules.nil?
+
+      # Seperate global modules and rollup modules
+      # TODO: Abstract YUI Modules into their own class with global/rollup as [r] attributes
       @modules.each do |name, mod|
         @global_modules[name] = true if mod[YUI_GLOBAL]
         if mod[YUI_SUPERSEDES]
@@ -231,56 +252,116 @@ module Yui
           mod[YUI_SUPERSEDES].each {|sup| map_satisfying_module(sup,name)}
         end
       end
+      
+      # Skin set-up
+      @skin = @yui_current[YUI_SKIN]
+      @skin['overrides'] = Hash.new
+      @skin[YUI_PREFIX] = 'skin-'
+
     end
 
     # Used to load YUI and/or custom components
-    # params array of components
-    def load(components = nil)
-      raise "Components must be defined in an array" if components.nil?
+    # 
+    # ==== Required Parameters
+    #   - components: (array)
+    # ==== Example
+    #   @y.load(['tabview', 'menu', 'grids'])
+    # 
+    def load(components = [])
+      raise "Components must be defined in an array" if components.empty?
       components.each { |c| load_single(c)}
     end
     
-    
-    def get_dependencies(module_type, modules)
+    # Filter the processed dependencies by module type (JS or CSS)
+    # 
+    # ==== Params
+    #   - modules: (array)
+    #   - module_type: (string)
+    # ==== Example
+    # 
+    #   css = filter_dependencies([{'name'=>'grids', 'type'=>'css'}, {'name'=>'dom', 'type'=>'js'}], YUI_CSS)
+    #   # => [{'name'=>'grids', 'type'=>'css'}]
+    # 
+    def filter_dependencies(modules, module_type)
       return modules.select{|mods| mods if mods['type'].include?(module_type)}.flatten
     end
 
-    def tags(module_type = nil, skip_sort = false)
+    # Returns appropriate tags for the loaded mofules
+    # 
+    # ==== Optional Parameters
+    #   - format: (string) Default to nil
+    #   - module_type: (string) Default to nil
+    #   - skip_sort: (boolean) Default to false
+    # 
+    # ==== Example
+    #   @y.Yui::Loader.new("2.7.0")
+    #   @y.load_optional = true
+    #   @y.combine = true
+    #   @y.load(["tabview","menu","grids"])
+    #   @y.tags
+    # 
+    #   # => <link rel="stylesheet" href="[REDACTED].css" type="text/css" charset="utf-8" />
+    #   # => <script type="text/javascript" charset="utf-8" src="[REDACTED].js"></script>
+    def tags(format = nil, module_type = nil, skip_sort = false)
       dependencies = process_dependencies(YUI_TAGS, module_type, skip_sort)
-      css = get_dependencies(YUI_CSS,dependencies)
-      js = get_dependencies(YUI_JS,dependencies)
-      html = String.new 
-      html += get_stylesheet_tag(css)
-      html += get_javascript_tag(js)
+      html = String.new
+      if format == :css or format.nil?
+        css = filter_dependencies(dependencies, YUI_CSS)
+        html += get_stylesheet_tag(css)
+      end
+      if format == :js or format.nil?
+        js = filter_dependencies(dependencies, YUI_JS)
+        html += get_javascript_tag(js)
+      end
       return html
     end
 
-    def get_javascript_tag(mods)
+    # Returns the appropriate SCRIPT tag based upon modules that have been requested as well as combo option
+    # 
+    # ==== Required Modules
+    #   - mods: (array)
+    # 
+    # ==== Example
+    # 
+    #   output = get_javascript_tag(['name' => 'tabview'])
+    #   # => <script type="text/javascript" charset="utf-8" src="http://yahoo.com/combo?2.7.0/build/tabview/tabview-min.js"></script>
+    # 
+    def get_javascript_tag(modules)
       html = String.new
       if @combine
         combo = []
-        mods.each do |mod|
+        modules.each do |mod|
           combo << mod['path']
         end
         html += '<script type="text/javascript" charset="utf-8" src="' + @combo_base + combo.join("&") + '"></script>' + "\n"
       else
-        mods.each do |mod|
+        modules.each do |mod|
           html += '<script type="text/javascript" charset="utf-8" src="' + @combo_base + mod['path'] + '"></script>' + "\n"
         end
       end
       return html
     end
 
-    def get_stylesheet_tag(mods)
+    # Returns the appropriate link tag based upon modules that have been requested as well as combo option
+    # 
+    # ==== Required Modules
+    #   - mods: (array)
+    # 
+    # ==== Example
+    # 
+    #   output = get_stylesheet_tag(['name' => 'tabview', 'type' => 'css', 'path' => '2.7.0/build/grids/grids-min.css'])
+    #   # => <link type="stylesheet" charset="utf-8" type="text/css" href="http://yahoo.com/combo?2.7.0/build/grids/grids-min.css" />
+    # 
+    def get_stylesheet_tag(modules)
       html = String.new
       if @combine
         combo = []
-        mods.each do |mod|
+        modules.each do |mod|
           combo << mod['path']
         end
         html += '<link rel="stylesheet" href="'+ @combo_base + combo.join("&") + '" type="text/css" charset="utf-8" />' + "\n"
       else
-        mods.each do |mod|
+        modules.each do |mod|
           html += '<link rel="stylesheet" href="'+ @combo_base + mod['path'] + '" type="text/css" charset="utf-8" />' + "\n"
         end
       end
@@ -289,9 +370,19 @@ module Yui
     end
     
     protected
-  
+
+    # Check off the module as ready to be loaded
+    # 
+    # ==== Required Parameters
+    #   - name: (array)
+    # 
     def account_for(name)
+      # add current module to the array of modules that have been processed
       @accounted_for[name] = name
+      
+      # if the instance modules already has the current module, 
+      # add any modules that supersede the current module to the array of modules
+      # that have been processed
       if @modules.has_key?(name)
         get_superseded(name).each do |supname, val|
           @accounted_for[supname] = true
@@ -299,7 +390,18 @@ module Yui
       end
     end
 
+    # Inspite of this methods name, if there's a module type defined, 
+    # find any new dependencies
+    # 
+    # ==== Required Paramters
+    #   - dependencies: (array)
+    #   - module_type: (string)
+    # 
+    # ==== Returns
+    #   - (array) of dependencies
+    # 
     def prune(dependencies, module_type)
+      puts "PRUNE:\tdependencies\t#{dependencies.inspect}\tmodule_type\t#{module_type}"
       unless module_type.nil?
         new_dependencies = Hash.new
         dependencies.each do |name, val|
@@ -311,33 +413,53 @@ module Yui
       end
     end
   
+  
+    # Finds modules that supersede the current module being processed
+    # 
+    # ==== Required Parameter
+    #   - name: (string)
+    # 
+    # ==== Returns
+    #   - (array)
     def get_superseded(name)
+      puts "get_superseded\tname\t#{name}"
       key = YUI_SUPERSEDES + name
-      sups = Hash.new
-      return @dep_cache[key] if @dep_cache[key]
+      supersedes = Hash.new
+      return @dependencies_cache[key] unless @dependencies_cache[key].nil?
 
       if @modules.has_key?(name)
+        # if the current modules has modules that supersede it, let's get those modules!
         unless @modules[name][YUI_SUPERSEDES].nil?
-          @modules[name][YUI_SUPERSEDES].each  do |sup_name|
-            sups[sup_name] = true
-            sups.merge!(@get_superseded[sup_name]) if @modules[sup_name]
+          @modules[name][YUI_SUPERSEDES].each  do |superseder|
+            supersedes[superseder] = true
+            supersedes.merge!(@get_superseded[superseder]) if @modules[superseder]
           end
         end
       end
 
-      @dep_cache[key] = sups
-      return sups
+      @dependencies_cache[key] = supersedes
+      return supersedes
     end
   
+  
+    # Determine if any of the modules we've requested requires a skin
+    # 
+    # ==== Required Paramters
+    #   - name: (string)
+    # 
+    # ==== Return
+    #   - (string)
+    # 
     def skin_setup(name)
       skin_name = nil
       dep = @modules[name]
   
       if dep and dep[YUI_SKINNABLE]
-        s = @skin
-    
-        if not s[YUI_OVERRIDES].empty? and s[YUI_OVERRIDES][name]
-          s[YUI_OVERRIDES][name].each do |name, over|
+        
+        current_skin = @skin
+        
+        unless current_skin[YUI_OVERRIDES].empty? and current_skin[YUI_OVERRIDES][name].nil?
+          current_skin[YUI_OVERRIDES][name].each do |name, over|
             skin_name = format_skin(over, name)
           end
         else
@@ -350,41 +472,37 @@ module Yui
         if skin.size == 3
           dep = @modules[skin[2]]
           package = dep[YUI_PKG] ? dep[YUI_PKG] : skin[2]
-          path = "#{package}/#{s[YUI_BASE]}#{skin[1]}/#{skin[2]}.css"
-          @modules[skin_name] = {
-            "name"  => skin_name, 
-            "type"  => YUI_CSS,
-            "path"  => path, 
-            "after" => s[YUI_AFTER]  
-          }
+          path = "#{package}/#{current_skin[YUI_BASE]}#{skin[1]}/#{skin[2]}.css"
+          @modules[skin_name] = { "name" => skin_name, "type" => YUI_CSS, "path" => path, "after" => current_skin[YUI_AFTER] }
         else
-          path = "#{s[YUI_BASE]}#{s[1]}/#{s[YUI_PATH]}"
-          new_mod = {
-            "name"   => skin_name,
-            "type"   => YUI_CSS,
-            "path"   => path, 
-            "rollup" => 3,
-            "after"  => s[YUI_AFTER]    
-          }
+          path = "#{current_skin[YUI_BASE]}#{current_skin[1]}/#{current_skin[YUI_PATH]}"
+          new_mod = {"name" => skin_name, "type" => YUI_CSS, "path" => path, "rollup" => 3, "after" => current_skin[YUI_AFTER] }
           @modules[skin_name] = new_mod
           @rollup_modules[skin_name] = new_mod
         end
       end
+
       return  skin_name
     end
   
     
     # Identify dependencies for a give module name
-    # @method getAllDependencies
-    # @param {string} mname Module name
-    # @param {boolean} loadOptional Load optional dependencies
-    # @param {array} completed
-    # @return {array}
+    # 
+    # ==== Required Paramters
+    #   - module_name: (string)  Module name
+    # 
+    # ==== Optional Parameters
+    #   - load_optional: (boolean) Load optional dependencies
+    #   - completed: (array)
+    # 
+    # ==== Returns
+    #   - (array)
+    # 
     def get_all_dependencies(module_name, load_optional = false, completed = {})
       key = [YUI_REQUIRES, module_name].join
       key += YUI_OPTIONAL if load_optional
   
-      return @dep_cache[key] if @dep_cache[key]
+      return @dependencies_cache[key] unless @dependencies_cache[key].nil?
   
       mod = @modules[module_name]
       requires = Hash.new
@@ -403,27 +521,46 @@ module Yui
         if not completed[name] and @modules[name]
           new_requires = get_all_dependencies(name, load_optional, completed)
           requires.merge!(new_requires)
-        else
-          # TODO: log error
         end
       end
   
-      @dep_cache[key] = requires
+      @dependencies_cache[key] = requires
       return requires
     end
   
+    # Get global dependencies that were defined by the YUI meta file
+    # 
+    # ==== Optional Parameter
+    #   - module_type: (string)
+    # 
+    # ==== Returns
+    #   - (array) of global modules
+    # 
     def get_global_dependencies(module_type = nil)
       return @global_modules
     end
   
-    # Returns true if the supplied satisfied module is satisfied by the supplied satisfier module
+    # Check to see if the a module can be satisfied by a rollup / other module
+    # 
+    # ==== Required Parameters
+    #   - satisfied: (string)
+    #   - satisfier: (string)
+    # 
+    # ==== Returns
+    #   - (boolean) true if the supplied satisfied module is satisfied by the supplied satisfier module
+    # 
     def module_satisfies?(satisfied, satisfier)
       satisfied.include?(satisfier) or (@satisfaction_map.has_key?(satisfied) and @satisfaction_map[satisfied][satisfier])
     end
   
     # Used to override the base directory for specific set of modules (Not supported with combo service)
-    # Params: base, modules
+    # 
+    # ==== Required Parameters
+    #   - base: (string?)
+    #   - modules: (array)
+    # 
     def override_base(base, modules)
+      # puts "override_base:\tbase#{base.inspect}\tmodules\t#{modules.size}"
       modules.each do |name|
         @base_override[name] = base
       end
@@ -453,12 +590,12 @@ module Yui
       
     # Only called if the loader is dirty
     def sort_dependencies(module_type, skip_sort = false)
-      requires     = {}
-      top      = {}
-      bot      = {}
-      not_done = {}
-      sorted   = {}
-      found    = {}
+      requires = Hash.new
+      top      = Hash.new
+      bot      = Hash.new
+      not_done = Hash.new
+      sorted   = Hash.new
+      found    = Hash.new
   
       # add global dependenices so they are included when calculating rollups
       globals = get_global_dependencies(module_type)
@@ -466,7 +603,7 @@ module Yui
       globals.each { |name, dep| requires[name] = true }
   
       # get and store the full list of dependencies
-      @requests.each do |name, val|
+      @required_modules.each do |name, val|
         requires[name] = true
         requires.merge!(get_all_dependencies(name, @load_optional))
       end
@@ -755,7 +892,7 @@ module Yui
           :YUI_SKIN      => @skin,
           :YUI_ROLLUP    => @rollup_modules,
           :YUI_GLOBAL    => @global_modules,
-          :YUI_DEPCACHE  => @dep_cache, 
+          :YUI_DEPCACHE  => @dependencies_cache, 
           :YUI_SATISFIES => @satisfaction_map,
           :YUI_FILTERS   => @filters    
         })
@@ -768,10 +905,10 @@ module Yui
         @dirty = true
       end
 
-      @undefined[name] = name unless @modules.has_key?(name)
+      @undefined_modules[name] = name unless @modules.has_key?(name)
 
       unless (@loaded.has_key?(name) or @accounted_for.has_key?(name))
-        @requests[name] = name
+        @required_modules[name] = name
         @dirty = true
       end
     end
