@@ -401,7 +401,6 @@ module Yui #:nodoc:
     #   - (array) of dependencies
     # 
     def prune(dependencies, module_type)
-      puts "PRUNE:\tdependencies\t#{dependencies.inspect}\tmodule_type\t#{module_type}"
       unless module_type.nil?
         new_dependencies = Hash.new
         dependencies.each do |name, val|
@@ -422,7 +421,6 @@ module Yui #:nodoc:
     # ==== Returns
     #   - (array)
     def get_superseded(name)
-      puts "get_superseded\tname\t#{name}"
       key = YUI_SUPERSEDES + name
       supersedes = Hash.new
       return @dependencies_cache[key] unless @dependencies_cache[key].nil?
@@ -560,12 +558,22 @@ module Yui #:nodoc:
     #   - modules: (array)
     # 
     def override_base(base, modules)
-      # puts "override_base:\tbase#{base.inspect}\tmodules\t#{modules.size}"
       modules.each do |name|
         @base_override[name] = base
       end
     end
   
+  
+    # Check to see if the current modules is already included or satisfied 
+    # by another rollup modules
+    # 
+    # ==== Required Parameters
+    #   - satisifed: (string)
+    #   - module_list: (array)
+    # 
+    # ==== Returns
+    #   - boolean: true if the current module is covered
+    # 
     def list_satisfies?(satisfied, module_list)
       return true if module_list.has_key?(satisfied)
       if @satisfaction_map.has_key?(satisfied)
@@ -576,6 +584,15 @@ module Yui #:nodoc:
       return false
     end
 
+    # Prevent rolling up too much?
+    # 
+    # ==== Required Parameters
+    #   - mod: (hash/object) of the current module
+    #   - module_list: (array) of modules
+    # 
+    # ==== Returns
+    #   - boolean: true if we're not rolling up at infinitum
+    # 
     def check_threshold?(mod, module_list)
       if not module_list.empty? and mod[YUI_ROLLUP].is_a?(Fixnum)
         matched = 0
@@ -588,7 +605,16 @@ module Yui #:nodoc:
       return false
     end
       
-    # Only called if the loader is dirty
+    # Sort out what module dependencies are needs, what's already included, etc.
+    # 
+    # ==== Required Parameter
+    #   - module_type: (string)
+    # ==== Optional Parameter
+    #   - skip_sort: (boolean)
+    # 
+    # ==== Return
+    #   - (array) of sorted and pruned modules to load
+    # 
     def sort_dependencies(module_type, skip_sort = false)
       requires = Hash.new
       top      = Hash.new
@@ -706,6 +732,17 @@ module Yui #:nodoc:
       return prune(sorted, module_type)
     end
 
+    # This is the main function that calls sub-methods for calculating dependencies and modules
+    # 
+    # ==== Required Parameters
+    #   - output_type: (string)
+    #   - module_type: (string)
+    # ==== Optional Parameters
+    #   - skip_sort: (boolean)
+    #   - show_loaded: (boolean)
+    # 
+    # ==== Returns
+    #   - (array) of modules to load
     def process_dependencies(output_type, module_type, skip_sort = false, show_loaded = false)
       if show_loaded or (not @dirty and not @sorted.empty?)
         sorted = prune(@sorted, module_type)
@@ -735,8 +772,14 @@ module Yui #:nodoc:
       return final_modules
     end
 
-    # Retrieve the calculated url for the component in questio
-    # Params: name of the YUI component
+    # Retrieve the calculated url for the component in question
+    # 
+    # ==== Required Paramter
+    #   - name: (string) of the YUI component
+    # TODO: Look into deprecating
+    # 
+    # ==== Returns
+    #   - (string) url of
     def get_url(name)
       # figure out how to set targets and filters
       url = String.new
@@ -748,12 +791,8 @@ module Yui #:nodoc:
         url = [base, name].join
       end
   
-      if @filter
-        if not @filter_list.empty? and not @filter_list[name]
-          # skip filter
-        elsif @filters[@filter]
-          url.gsub!(filtr[YUI_SEARCH], @filters[@filter][YUI_REPLACE])
-        end
+      unless @filter.nil? and @filters[@filter].nil?
+        url.gsub!(filtr[YUI_SEARCH], @filters[@filter][YUI_REPLACE])
       end
   
       if @version
@@ -765,9 +804,16 @@ module Yui #:nodoc:
     end
 
     # Retrieve the contents of a remote resource
-    # Params: url to fetch data from
+    # 
+    # ==== Required Parameter
+    #   - url: (string) to fetch data from
+    # 
+    # ==== Returns
+    #   - (string) contents of the url we fetched
+    # 
+    # TODO Add Cache support
+    # 
     def get_remote_content(url)
-      # TODO Add Cache support
       # cachr = Cacher.new
       # remote_content = cachr.fetch(url)
       remote_content = nil
@@ -782,19 +828,27 @@ module Yui #:nodoc:
     end
 
     # Retrieve the raw source contents for a given module name
-    # @method get_raw
-    # @param {string} name The module name you wish to fetch the source from
-    # @return {string} raw source
+    # 
+    # ==== Required Parameter
+    #   - name: (string) The module name you wish to fetch the source from
+    #
+    # ==== Return
+    #   - (string) raw source
+    # 
     def get_raw(name)
       raise "CURL and/or Caching was not detected, so the content can't be embedded" unless @embed_avail
       return get_remote_content(get_url(name))
     end
 
     # Retrieve the style or script node with embedded source for a given module name and resource type
-    # @method get_content
-    # @param {string} name The module name to fetch the source from
-    # @param {string} type Resource type (i.e.) YUI_JS or YUI_CSS
-    # @return {string} style or script node with embedded source
+    # 
+    # ==== Required Parameters
+    #   - name: (string) The module name to fetch the source from
+    #   - type: (string) type Resource type (i.e.) YUI_JS or YUI_CSS
+    # 
+    # ==== Returns
+    #   - (string) style or script node with embedded source
+    # 
     def get_content(name, type)
       unless @curl_avail
         return "<!-- CURL was not detected, so the content can't be embedded -->" + get_link(name, type)
@@ -811,26 +865,36 @@ module Yui #:nodoc:
     end
 
     # Retrieve the link or script include for a given module name and resource type
-    # @method get_link
-    # @param {string} name The module name to fetch the include for
-    # @param {string} type Resource type (i.e.) YUI_JS or YUI_CSS
-    # @return {string} link or script include
+    # 
+    # ==== Required Parameters
+    #   - name: (string) The module name to fetch the include for
+    #   - type: (string) Resource type (i.e.) YUI_JS or YUI_CSS
+    # 
+    # ==== Returns
+    #   - (string) link or script include
+    # 
     def get_link(name, type)
       url = get_url(name)
   
-      if not url.nil?
-        return "<!-- PATH FOR #{name} NOT SPECIFIED -->"
-      elsif type.include?(YUI_CSS)
-        return "<link rel=\"stylesheet\" href=\"#{url}\" type=\"text/css\" media=\"screen\" charset=\"utf-8\" />"
+      unless url.nil?
+        if type.include?(YUI_CSS)
+          return "<link rel=\"stylesheet\" href=\"#{url}\" type=\"text/css\" media=\"screen\" charset=\"utf-8\" />"
+        else
+          return "<script type=\"text/javascript\" charset=\"utf-8\" src=\"#{url}\"></script>"
+        end
       else
-        return "<script type=\"text/javascript\" charset=\"utf-8\" src=\"#{url}\"></script>"
+        return "<!-- PATH FOR #{name} NOT SPECIFIED -->"
       end
     end
 
     # Retrieves the combo link or script include for the currently loaded modules of a specific resource type
-    # @method get_combo_link                                                                                       
-    # @param {string} type Resource type (i.e.) YUI_JS or YUI_CSS                                                
-    # @return {string} link or script include                                                                    
+    # 
+    # ==== Required Parameter
+    #   - type: (string) Resource type (i.e.) YUI_JS or YUI_CSS
+    # 
+    # ==== Returns
+    #   - (string) link or script include
+    # 
     def get_combo_link(type)
       url = String.new
   
@@ -863,28 +927,38 @@ module Yui #:nodoc:
     end
 
     # Adds a module the combo collection for a specified resource type
-    # @method addToCombo
-    # @param {string} name The module name to add
-    # @param {string} type Resource type (i.e.) YUI_JS or YUI_CSS
+    # 
+    # ==== Required Parameters
+    #   - name: (string) The module name to add
+    #   - type: (string) Resource type (i.e.) YUI_JS or YUI_CSS
+    # 
+    # ==== Return
+    #   - (hash) object of module to load 
+    # 
     def add_to_combo(name, type)
       path_to_module = [@combo_default_version, "/build/", @modules[name][YUI_PATH]].join
       return {"name" => name, "type" => type, "path" => path_to_module}
     end
 
     # Identifies what module(s) are provided by a given module name (e.g.) yaho-dom-event provides yahoo, dom, and event
-    # @method getProvides
-    # @param {string} name Module name
-    # @return {array}
+    # 
+    # ==== Required Parameter
+    #   - name: (string) Module name
+    # 
+    # ==== Returns
+    #   - (array) additional modules that are covered by the current modules
+    # 
     def get_provides(name)
       provides = Array.new
       provides << name
       if @modules.has_key?(name) and not @modules[name][YUI_SUPERSEDES].nil?
         @modules[name][YUI_SUPERSEDES].each { |i| provides << i } 
       end
-  
       return provides
     end
 
+    # Updates the cache for this instance
+    # 
     def update_cache
       if @full_cache_key
         Rails.cache.write(@full_cache_key, {
@@ -899,6 +973,14 @@ module Yui #:nodoc:
       end
     end
 
+    # Load a single module unless it's already been loaded
+    # 
+    # ==== Required Parameter
+    #   - name: string (?)
+    # 
+    # ==== Returns
+    #   - apparently nothing in particular
+    # 
     def load_single(name)
       unless parse_skin(name).nil?
         @skins << name
@@ -913,20 +995,45 @@ module Yui #:nodoc:
       end
     end
 
+    # Parse the current module and get the skin name
+    # 
+    # ==== Required Parameters
+    #   - module_name: (string)
+    #
+    # ==== Return
+    #   - (array) of the module name split up by the prefix or nil
+    # 
     def parse_skin(module_name)
       module_name.include?(@skin[YUI_PREFIX]) ? module_name.split('-') : nil
     end
 
+    # Format the skin name
+    # 
+    # ==== Required Parameters
+    #   - skin: (string)
+    #   - module_name: (string)
+    # 
+    # ==== Returns
+    #   - (string)
+    # 
     def format_skin(skin, module_name)
       prefix_skin = @skin[YUI_PREFIX] + skin
       prefix_skin += '-' + module_name unless module_name.nil?
       return prefix_skin
     end
 
+    # This isn't really used
+    # TODO: Deprecate
     def set_processed_module_type(module_type = 'ALL')
       @processed_module_types[module_type] = true
     end
 
+    # Used to manually define what modules have already been loade
+    # for subsequent tag calls
+    # 
+    # ==== Required Parameters
+    #   - modules: (array)
+    # 
     def set_loaded(modules)
       modules.each do |mod|
         unless @modules[mod].empty?
@@ -941,6 +1048,12 @@ module Yui #:nodoc:
       end
     end
 
+    # Create tree of modules that satisfy other modules
+    # 
+    # ==== Required Parameters
+    #   - satisfied: (string)
+    #   - satisfier: (string)
+    # 
     def map_satisfying_module(satisfied, satisfier)
       @satisfaction_map[satisfied] = { satisfier => true }
     end
